@@ -1,0 +1,16 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+
+# Jupyter Notebooks anc Checkpoints
+.ipynb_checkpoints
+*.ipynb
+
+# logs
+*.log
+*.err
+*.out
+
+# data need to be manually added
+*.db
+*.parquet
+*.csv
