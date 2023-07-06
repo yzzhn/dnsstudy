@@ -1,6 +1,7 @@
 import dns
 import pandas as pd
 import os
+import traceback
 
 import dns.name
 import dns.asyncresolver
@@ -14,20 +15,22 @@ import datetime
 import numpy as np
 from typing import Literal
 
-
 # local import 
 from utils import Domain, CNameLoopsTooLong
 from config import MAXCONCURRENCY, RESOLVER_LIST, DATAROOT_DIR
 
 
-def get_resolver(addresses=None, lifetime=5, payload=1420):
+def get_resolver(addresses=None, lifetime=5, payload=1420, AuthenticData=False):
     """
     Return asyncresolver object configured to use given list of addresses, and
     that sets DO=1, RD=1, AD=1, and EDNS payload for queries to the resolver.
     """
-
     resolver = dns.asyncresolver.Resolver()
-    resolver.set_flags(dns.flags.RD | dns.flags.AD)
+
+    if AuthenticData == True:
+        resolver.set_flags(dns.flags.RD | dns.flags.AD)
+    else:
+        resolver.set_flags(dns.flags.RD)
     resolver.use_edns(edns=0, ednsflags=dns.flags.DO, payload=payload)
     resolver.lifetime = lifetime
     if addresses is not None:
@@ -46,12 +49,12 @@ def ifCNAME(dnsrr: dns.rrset.RRset) -> bool:
 
 async def query_dns_rec(domain: Domain, resolver: dns.asyncresolver, query_type: str) -> dns.message.QueryMessage:
     """
-    query dns records given the domain object and the dns asynchronous resolver, 
+    query dns records given the domain object, the dns asynchronous resolver, and query type
     return the corresponding dns response or raise error
 
     Parameters
     ----------
-    domain : str
+    domain : Domain
     resolver : dns.asyncresolver
     query_type : str
     """
@@ -76,7 +79,7 @@ async def query_https_rec(domain: Domain, resolver: dns.asyncresolver) -> Domain
 
     Parameters
     ----------
-    domain : str
+    domain : Domain
     resolver : dns.asyncresolver    
     """
     try:
@@ -89,40 +92,53 @@ async def query_https_rec(domain: Domain, resolver: dns.asyncresolver) -> Domain
         # resolve cname and query the corresponding HTTPS records       
         try:
             cname = msg.resolve_chaining().canonical_name.to_text()
-            print("resolving cname:", cname)
-            
+
             domain.set_cname(cname)
             
-            # just to make sure there's no loops.
+            # just to make sure there's no loop.
             domain.__cnameloop__ += 1
             if domain.__cnameloop__ > 20:
                 domain.set_error("CNAME", "CNameLoopsTooLong")
                 raise CNameLoopsTooLong
-            return query_https_rec(domain, resolver) # requery till resolved        
+                
+            print("REQUERYING CNAME:", domain.cname)
+            coro = query_https_rec(domain, resolver)
+            task = await asyncio.create_task(coro)
+            return task # requery till resolved
         except Exception as err: # capture cname resolving error 
             raise err
-    except Exception as err:
+            
+    except Exception as err: # capture dns https query error
         raise err
 
+        
 async def set_dns_records(domain: Domain, resolver: dns.asyncresolver, 
-                          query_type: Literal["HTTPS", "A", "AAAA"]) -> dns.message.QueryMessage:
+                          query_type: Literal["HTTPS", "A", "AAAA", "NS"]) -> dns.message.QueryMessage:
     """
-   
+    query dns https records given the domain object and the dns asynchronous resolver.
+    if cname was returned, resolving the correct cname and query the corresponding https record.
+    return the corresponding dns response or raise error
+
+    Parameters
+    ----------
+    domain : Domain
+    resolver : dns.asyncresolver,
+    query_type : Literal["HTTPS", "A", "AAAA"]
     """
+    
     try:
         if query_type == "HTTPS":
-            print("before set https")
             msg = await query_https_rec(domain, resolver)
-            print("after set https")
-
-        msg = await query_dns_rec(domain, resolver, query_type)
-        domain.set_message(query_type, msg)
+        else:
+            msg = await query_dns_rec(domain, resolver, query_type)
+        domain.set_message(query_type, msg) # store message
     except Exception as err:
         exc_type, exc_value, exc_traceback = sys.exc_info()
-        domain.set_error(query_type, exc_type.__name__)
+        domain.set_error(query_type, exc_type.__name__) # store error
+        
         if query_type == "HTTPS":
             raise err
-            
+        
     return domain
 
 
@@ -132,10 +148,11 @@ async def query_domain(domain: Domain, resolver: dns.asyncresolver) -> Domain:
         
         https_answer = domain.message["HTTPS"].answer
         
-        # raise NoAnswer error if there's no answer in https records
+        # raise NoAnswer error if the returned answer is empty https records
         if len(https_answer) == 0:
             raise dns.resolver.NoAnswer
         
+        """ deprecated 2023-07-06
         # if ipv4 or ipv6 hint in https record, query corresponding dns records
         for rr in https_answer:
             rr_str = rr.to_text()
@@ -144,40 +161,55 @@ async def query_domain(domain: Domain, resolver: dns.asyncresolver) -> Domain:
             
             if "ipv6hint" in rr_str:
                 domain = await set_dns_records(domain, resolver, "AAAA")
+        """
+        
+        """ starting from 2023-07-06, we query A, AAAA, NS for any domain that has HTTPS rr """
+        domain = await set_dns_records(domain, resolver, "NS")
+        domain = await set_dns_records(domain, resolver, "A")
+        domain = await set_dns_records(domain, resolver, "AAAA")
 
     except Exception as err:
         exc_type, exc_value, exc_traceback = sys.exc_info()
-        print("ERROR LOG:", domain.name, exc_type.__name__)
-        if exc_type == dns.resolver.NoAnswer:
-            raise err
+        # raise noanswer error so we can capture this error and skip the request during safe_async_query()
+        if exc_type == dns.resolver.NoAnswer: 
+            #pass
+            raise err 
+        if exc_type != dns.resolver.NoAnswer:
+            print("ERROR LOG:", domain.name, ",ERROR TYPE:", exc_type.__name__, ",ERROR VALUE:", exc_value)
+        #msg = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+        #print("ERROR LOG:",msg)
     return domain
 
 
-async def safe_async_query(domain: Domain, resolver: dns.asyncresolver, sem: asyncio.Semaphore):
+async def safe_async_query(domain: Domain, resolver: dns.asyncresolver, sem: asyncio.Semaphore, data_dict:dict):
     """
     Restrict the concurrency of query with asyncio.Semaphore.
     """
-    async with sem:  # semaphore limits num of simultaneous downloads
+    async with sem:  # semaphore limits num of simultaneous queries
         try:
             res = await query_domain(domain, resolver)
-            RESULTS[domain.name] = res
+            data_dict[domain.name] = res #store data in dictionary
             return res
         except:
+            # if the request domain does not have HTTPS answer, we do not store the data in data_dict.
             pass
 
 
-async def query_all_dns_https(domains: [Domain], resolver: dns.asyncresolver, sem: asyncio.Semaphore):
+async def query_all_dns_https(domains: [Domain], resolver: dns.asyncresolver, sem: asyncio.Semaphore, data_dict:dict):
     """
     Wrap function to query all domains
     """
-    tasks = [asyncio.ensure_future(safe_async_query(domain, resolver, sem)) for domain in domains]
+    tasks = [asyncio.ensure_future(safe_async_query(domain, resolver, sem, data_dict)) for domain in domains]
     await asyncio.gather(*tasks)
     
     
-def init_domain_list(df: pd.DataFrame) -> [Domain]:
+def init_domain_list(df: pd.DataFrame, columnname: str) -> [Domain]:
+    """
+    initiate all domain into a list
+    """
     dom_l = []
     for idx, item in df.iterrows():
-        dom = Domain(item["name"], item["rank"])
+        dom = Domain(item[columnname], item["rank"])
         dom_l.append(dom)
     return dom_l
 
@@ -202,54 +234,25 @@ async def query_https(domain: Domain, resolver: dns.asyncresolver, query_type: s
         exc_type, exc_value, exc_traceback = sys.exc_info()
         domain.set_error(exc_type.__name__)
     return domain
-
-
-
 """
 
-if __name__ == "__main__":
-
-    # read top 1m list
-    trancofpath = os.path.join(DATAROOT_DIR, "tranco_LYVK4.csv")
-    print("reading csv:", trancofpath)
-    tranco = pd.read_csv(trancofpath, names=["rank", "name"])
-
-    # split into smaller df
-    MAXSPLIT = 200
-    df_lst = np.array_split(tranco, MAXSPLIT)
-
-    today = datetime.datetime.now().strftime("%Y%m%d")
-    OUT_FILE = "../data/2023-03-20/output_{}_{:03d}.pickle"
-
-    sem = asyncio.Semaphore(MAXCONCURRENCY)
-
-    loop = asyncio.get_event_loop()
-
-    for i in range(MAXSPLIT):
-        df = df_lst[i]
-        dom_l = init_domain_list(df)
-        print(dom_l[0].name)
-        outfpath = OUT_FILE.format(today, i)
-        print("output file path:", outfpath)
-        print("working on file:", i)
-        
-        resolver = get_resolver(addresses=RESOLVER_LIST)
-        RESULTS = dict()
-
-        print("start query", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
-
-        s = time.perf_counter()
-
-        loop.run_until_complete(query_all_dns_https(domains=dom_l, resolver=resolver, sem=sem))
-        
-
-        elapsed = time.perf_counter() - s
-        print(f"{__file__} executed in {elapsed:0.6f} seconds.")
-
-        print("end query", datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
-
-        with open(outfpath, 'wb') as outfile:
-            pickle.dump(RESULTS, outfile)
+   
+def get_apexName(name):
+    """
+    parse domain apex name, assume the name in tranco list is in decent format
+    todo? tldextract to parse the domain.
+    """
+    subs = name.split(".")
     
-    loop.run_until_complete(loop.shutdown_asyncgens())
-    loop.close()
+    if subs[0] == "www":
+        return ".".join(subs[1:])
+    return name
+
+def get_wwwName(name):
+    """add `www` before domain name"""
+    subs = name.split(".")
+    
+    if subs[0] != "www":
+        return ".".join(["www", name])
+    return name
+
