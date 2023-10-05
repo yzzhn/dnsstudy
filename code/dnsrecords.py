@@ -234,6 +234,7 @@ class IPAnswer:
     
     def get_ip_addresses(self, msg:dns.message.QueryMessage) -> str(dict):
         addresses = []
+        res = {}
         
         rdtypemap = {1:"A", 28:"AAAA"}
         
@@ -248,7 +249,70 @@ class IPAnswer:
             for item in rdata:
                 addresses.append(item.address)
             
-            res = {rdtypemap[rr.rdtype]: ",".join([ip for ip in addresses])}
+            #res = {rdtypemap[rr.rdtype]: ",".join([ip for ip in addresses])}
+            res = {rdtypemap[rr.rdtype]: addresses}
             
         self.addresses = json.dumps(res)
+        return json.dumps(res) 
+    
+    
+class NSAnswer:
+    """
+    class to hold parsed https answers
+    """
+    def __init__(self, msg: dns.message.QueryMessage):
+        self.answer = msg.answer
+        self.nameservers = None
+    
+    def get_nameservers(self, msg:dns.message.QueryMessage) -> str(dict):
+        nameservers = []
+        res = {}
+                
+        if len(msg.answer) == 0:
+            return None
+        
+        for rr in msg.answer:
+            if rr.rdtype != 2: # https://dnspython.readthedocs.io/en/latest/rdatatype-list.html
+                continue
+                
+            rdata = rr.to_rdataset()
+            for item in rdata:
+                tmpns = item.to_text()
+                nameservers.append(tmpns)
+            
+            #res = {"NS": ",".join([ns for ns in nameservers])}
+        
+        res = {"NS": nameservers}
+            
+        self.nameservers = json.dumps(res)
+        return json.dumps(res) 
+    
+    
+class SOAAnswer:
+    """
+    class to hold parsed https answers
+    """
+    def __init__(self, msg: dns.message.QueryMessage):
+        self.answer = msg.answer
+        self.soainfo = None
+    
+    def get_soainfo(self, msg:dns.message.QueryMessage) -> str(dict):
+        soainfo = []
+        res = {}
+                
+        if len(msg.answer) == 0:
+            return None
+        
+        for rr in msg.answer:
+            if rr.rdtype != 6: # https://dnspython.readthedocs.io/en/latest/rdatatype-list.html
+                continue
+                
+            rdata = rr.to_rdataset()
+            for item in rdata:
+                tmpsoa = item.to_text()
+                soainfo.append(tmpsoa)
+            
+        res = {"SOA": soainfo}
+            
+        self.nameservers = json.dumps(res)
         return json.dumps(res) 
