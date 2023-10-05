@@ -113,7 +113,7 @@ async def query_https_rec(domain: Domain, resolver: dns.asyncresolver) -> Domain
 
         
 async def set_dns_records(domain: Domain, resolver: dns.asyncresolver, 
-                          query_type: Literal["HTTPS", "A", "AAAA", "NS"]) -> dns.message.QueryMessage:
+                          query_type: Literal["HTTPS", "A", "AAAA", "NS", "SOA"]) -> dns.message.QueryMessage:
     """
     query dns https records given the domain object and the dns asynchronous resolver.
     if cname was returned, resolving the correct cname and query the corresponding https record.
@@ -165,6 +165,7 @@ async def query_domain(domain: Domain, resolver: dns.asyncresolver) -> Domain:
         
         """ starting from 2023-07-06, we query A, AAAA, NS for any domain that has HTTPS rr """
         domain = await set_dns_records(domain, resolver, "NS")
+        domain = await set_dns_records(domain, resolver, "SOA")
         domain = await set_dns_records(domain, resolver, "A")
         domain = await set_dns_records(domain, resolver, "AAAA")
 
@@ -236,7 +237,48 @@ async def query_https(domain: Domain, resolver: dns.asyncresolver, query_type: s
     return domain
 """
 
-   
+
+async def query_domain_ns_soa(domain: Domain, resolver: dns.asyncresolver) -> Domain:
+    try:
+        """query NS and SOA for any given domain"""
+        domain = await set_dns_records(domain, resolver, "NS")
+        domain = await set_dns_records(domain, resolver, "SOA")
+    except Exception as err:
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        # raise noanswer error so we can capture this error and skip the request during safe_async_query()
+        if exc_type == dns.resolver.NoAnswer: 
+            #pass
+            raise err 
+        if exc_type != dns.resolver.NoAnswer:
+            print("ERROR LOG:", domain.name, ",ERROR TYPE:", exc_type.__name__, ",ERROR VALUE:", exc_value)
+        #msg = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+        #print("ERROR LOG:",msg)
+    return domain
+
+
+async def safe_async_query_ns_soa(domain: Domain, resolver: dns.asyncresolver, sem: asyncio.Semaphore, data_dict:dict):
+    """
+    Restrict the concurrency of query with asyncio.Semaphore.
+    """
+    async with sem:  # semaphore limits num of simultaneous queries
+        try:
+            res = await query_domain_ns_soa(domain, resolver)
+            data_dict[domain.name] = res #store data in dictionary
+            return res
+        except:
+            # if the request domain does not have HTTPS answer, we do not store the data in data_dict.
+            pass
+
+
+async def query_all_dns_ns_soa(domains: [Domain], resolver: dns.asyncresolver, sem: asyncio.Semaphore, data_dict:dict):
+    """
+    Wrap function to query NS and SOA records for all given domains
+    """
+    tasks = [asyncio.ensure_future(safe_async_query_ns_soa(domain, resolver, sem, data_dict)) for domain in domains]
+    await asyncio.gather(*tasks)
+
+
+    
 def get_apexName(name):
     """
     parse domain apex name, assume the name in tranco list is in decent format
