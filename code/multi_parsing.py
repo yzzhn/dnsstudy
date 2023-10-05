@@ -18,11 +18,14 @@ from dnsrecords import *
 
 
 def unpack_domain_obj(domain:Domain) -> pd.Series:
+    version = "0.2"
     rank = domain.rank
     name = domain.name
     cname = domain.cname
     error = domain.error
     https = None
+    NS = None
+    SOA = None
     A = None
     AAAA = None
     
@@ -41,7 +44,24 @@ def unpack_domain_obj(domain:Domain) -> pd.Series:
                 return None
         except Exception as err:
             raise err
+            
+    if "NS" in domain.message.keys():
+        try:
+            msg = domain.message["NS"]
+            tmp = NSAnswer(msg)
+            NS = tmp.get_nameservers(msg)
+        except Exception as err:
+            raise err
+            
     
+    if "SOA" in domain.message.keys():
+        try:
+            msg = domain.message["SOA"]
+            tmp = SOAAnswer(msg)
+            SOA = tmp.get_soainfo(msg)
+        except Exception as err:
+            raise err
+            
     if "A" in domain.message.keys():
         try:
             msg = domain.message["A"]
@@ -58,13 +78,13 @@ def unpack_domain_obj(domain:Domain) -> pd.Series:
         except Exception as err:
             raise err
     
-    res = pd.Series({"rank": rank, "domain": name, "cname": cname,
-           "https": https, "a": A, "aaaa": AAAA, "error": error}).to_frame().T
+    res = pd.Series({"version": version, "rank": rank, "domain": name, "cname": cname,
+           "https": https, "ns": NS, "soa": SOA, "a": A, "aaaa": AAAA, "error": error})
     return res
 
 
 def process_data(flist: list) -> pd.DataFrame:
-    df = pd.DataFrame(columns = ["rank", "domain", "cname", "https", "a", "aaaa", "error"])
+    df = pd.DataFrame(columns = ["version", "rank", "domain", "cname", "https", "ns", "a", "aaaa", "error"])
     errdf = pd.DataFrame(columns = ["domain", "runtimeErrorType", "runtimeErrorInfo"])
 
     for f in flist:
@@ -74,11 +94,12 @@ def process_data(flist: list) -> pd.DataFrame:
 
         for key, value in domain_dict.items():
             try:
+                #print(key, value)
                 res = unpack_domain_obj(value)
                 if res is None:
                     print(f, key, "EMPTY")
                     continue
-                df = pd.concat([df, pd.DataFrame(res)], ignore_index=True)
+                df = pd.concat([df, res.to_frame().T], ignore_index=True)
             except Exception as err:
                 exc_type, exc_value, exc_traceback = sys.exc_info()
                 errdf = pd.concat([errdf, pd.Series({"fname": f, "domain":key, "runtimeError": exc_type.__name__, 
