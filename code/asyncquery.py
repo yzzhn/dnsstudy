@@ -47,6 +47,7 @@ def ifCNAME(dnsrr: dns.rrset.RRset) -> bool:
         return True
     return False
 
+
 async def query_dns_rec(domain: Domain, resolver: dns.asyncresolver, query_type: str) -> dns.message.QueryMessage:
     """
     query dns records given the domain object, the dns asynchronous resolver, and query type
@@ -298,3 +299,44 @@ def get_wwwName(name):
         return ".".join(["www", name])
     return name
 
+
+
+
+async def query_nameserver_ip(domain: Domain, resolver: dns.asyncresolver) -> Domain:
+    try:
+        """query NS and SOA for any given domain"""
+        domain = await set_dns_records(domain, resolver, "A")
+        domain = await set_dns_records(domain, resolver, "AAAA")
+    except Exception as err:
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        # raise noanswer error so we can capture this error and skip the request during safe_async_query()
+        if exc_type == dns.resolver.NoAnswer: 
+            #pass
+            raise err 
+        if exc_type != dns.resolver.NoAnswer:
+            print("ERROR LOG:", domain.name, ",ERROR TYPE:", exc_type.__name__, ",ERROR VALUE:", exc_value)
+        #msg = "".join(traceback.format_exception(type(err), err, err.__traceback__))
+        #print("ERROR LOG:",msg)
+    return domain
+
+
+async def safe_async_query_nameserver_ip(domain: Domain, 
+                                         resolver: dns.asyncresolver, 
+                                         sem: asyncio.Semaphore, data_dict:dict):
+    """
+    Restrict the concurrency of query with asyncio.Semaphore.
+    """
+    async with sem:  # semaphore limits num of simultaneous queries
+        try:
+            res = await query_nameserver_ip(domain, resolver)
+            data_dict[domain.name] = res #store data in dictionary
+            return res
+        except:
+            pass
+
+async def query_all_nameserver_ip(domains: [Domain], resolver: dns.asyncresolver, sem: asyncio.Semaphore, data_dict:dict):
+    """
+    Wrap function to query NS and SOA records for all given domains
+    """
+    tasks = [asyncio.ensure_future(safe_async_query_nameserver_ip(domain, resolver, sem, data_dict)) for domain in domains]
+    await asyncio.gather(*tasks)
