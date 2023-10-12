@@ -1,6 +1,10 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+### 2023-10-11
+- **Added:** (daily) add the nameservers of domains (apex/www) with HTTPS records into database (NameServerIP.db). 
+- **Added:** (daily) query A and AAAA for all nameserver in NameServerIP.db. 
+
 ### 2023-08-15
 - **Added:** 23-08-15, whenever we find a new domain that has an HTTPS records, we add it into database (history.db). 
 - **Added:** 23-08-15, we query the NS and SOA records for domains in (history.db). 
