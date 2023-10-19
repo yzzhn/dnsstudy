@@ -1,6 +1,10 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+
+### 2023-10-19
+- **Changed:** (daily) query Zone name for NS and SOA records if domain has a cname.
+
 ### 2023-10-11
 - **Added:** (daily) add the nameservers of domains (apex/www) with HTTPS records into database (NameServerIP.db). 
 - **Added:** (daily) query A and AAAA for all nameserver in NameServerIP.db. 

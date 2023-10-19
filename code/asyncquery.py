@@ -5,6 +5,7 @@ import traceback
 
 import dns.name
 import dns.asyncresolver
+import dns.resolver
 import dns.dnssectypes
 
 import sys
@@ -63,7 +64,13 @@ async def query_dns_rec(domain: Domain, resolver: dns.asyncresolver, query_type:
         if domain.cname is None:
             qname = dns.name.from_text(domain.name)
         else:
-            qname = dns.name.from_text(domain.cname)
+            if query_type not in ["NS", "SOA"]:
+                qname = dns.name.from_text(domain.cname)
+            else:
+                try:
+                    qname = dns.resolver.zone_for_name(domain.cname)
+                except:
+                    qname = dns.name.from_text(domain.cname)
     
         res = await resolver.resolve(qname, query_type, raise_on_no_answer=False)
         return res.response
