@@ -20,7 +20,6 @@ from itertools import islice
 import multiprocessing
 
 
-
 def singlecore_nsquerying(df_dict):
     today = datetime.datetime.now()
     todaystr = today.strftime("%Y-%m-%d")
@@ -79,8 +78,11 @@ def mltproc_nsquerying(nshist, maxproc = psutil.cpu_count(logical = False), mute
     pool = multiprocessing.Pool(processes = maxproc)
 
     # split into smaller df 
-    MOD = 2
-    MAXSPLIT = MOD * maxproc
+    #MOD = 2
+    #MAXSPLIT = MOD * maxproc
+    
+    ## Switch to single core
+    MAXSPLIT = 1
     
     # query apex
     df_list = np.array_split(nshist, MAXSPLIT)
@@ -89,10 +91,9 @@ def mltproc_nsquerying(nshist, maxproc = psutil.cpu_count(logical = False), mute
     proc_list = []
     for i in range(MAXSPLIT):
         data_dict[i]= df_list[i]
-        if len(data_dict) == MOD:
-            proc_list.append(data_dict)
-            data_dict = {}            
-    
+        #if len(data_dict) == MOD:
+        proc_list.append(data_dict)
+        
     res = pool.map(singlecore_nsquerying, proc_list)
     
     print ("finished query")
@@ -181,7 +182,6 @@ def get_ns_table(dtype="ns", dbfpath=NSIP_DB):
     conn.commit()
     conn.close()
     return resdf
-
 
 
 if __name__ == "__main__":
