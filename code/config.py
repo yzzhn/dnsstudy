@@ -15,11 +15,13 @@ HIST_DB = "/data/history/history.db"
 ERRDF_DIR = "/data/errordom/raw"
 ERRDF_PARSED = "/data/errordom/raw"
 
-
 # path to store NS IP history measurement
 NSIP_DIR = "/data/nsIP/raw"
 NSIP_PARSED = "/data/nsIP/parsed"
 NSIP_DB = "/data/nsIP/NameServerIP.db"
+
+# path to store TLSconnection measurement
+TLS_DIR = "/data/tlsconnect"
 
 # default concurrency for query 
 MAXCONCURRENCY = 30
