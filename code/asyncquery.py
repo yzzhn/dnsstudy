@@ -15,11 +15,12 @@ import time
 import datetime
 import numpy as np
 from typing import Literal
+import subprocess
 
 # local import 
 from utils import Domain, CNameLoopsTooLong
-from config import MAXCONCURRENCY, RESOLVER_LIST, DATAROOT_DIR
-
+from config import MAXCONCURRENCY, RESOLVER_LIST, DATAROOT_DIR, TLS_DIR
+from TLSconnection import query_tlsconnect
 
 def get_resolver(addresses=None, lifetime=5, payload=1420, AuthenticData=False):
     """
@@ -150,7 +151,8 @@ async def set_dns_records(domain: Domain, resolver: dns.asyncresolver,
     return domain
 
 
-async def query_domain(domain: Domain, resolver: dns.asyncresolver) -> Domain:
+
+async def query_domain(domain: Domain, resolver: dns.asyncresolver, dtype:Literal["apex", "www"], logday:str) -> Domain:
     try:
         domain = await set_dns_records(domain, resolver, "HTTPS")
         
@@ -160,22 +162,16 @@ async def query_domain(domain: Domain, resolver: dns.asyncresolver) -> Domain:
         if len(https_answer) == 0:
             raise dns.resolver.NoAnswer
         
-        """ deprecated 2023-07-06
-        # if ipv4 or ipv6 hint in https record, query corresponding dns records
-        for rr in https_answer:
-            rr_str = rr.to_text()
-            if "ipv4hint" in rr_str:
-                domain = await set_dns_records(domain, resolver, "A")
-            
-            if "ipv6hint" in rr_str:
-                domain = await set_dns_records(domain, resolver, "AAAA")
-        """
         
         """ starting from 2023-07-06, we query A, AAAA, NS for any domain that has HTTPS rr """
         domain = await set_dns_records(domain, resolver, "NS")
         domain = await set_dns_records(domain, resolver, "SOA")
         domain = await set_dns_records(domain, resolver, "A")
         domain = await set_dns_records(domain, resolver, "AAAA")
+
+        if dtype == "apex":
+            # if it's apex domain, we check ip addresses and send tls connection when ip mismatch
+            query_tlsconnect(domain, TLS_DIR, logday)
 
     except Exception as err:
         exc_type, exc_value, exc_traceback = sys.exc_info()
@@ -190,25 +186,29 @@ async def query_domain(domain: Domain, resolver: dns.asyncresolver) -> Domain:
     return domain
 
 
-async def safe_async_query(domain: Domain, resolver: dns.asyncresolver, sem: asyncio.Semaphore, data_dict:dict):
+async def safe_async_query(domain: Domain, resolver: dns.asyncresolver, sem: asyncio.Semaphore, 
+                           data_dict:dict, dtype:Literal["apex", "www"], logday: str):
     """
     Restrict the concurrency of query with asyncio.Semaphore.
     """
     async with sem:  # semaphore limits num of simultaneous queries
         try:
-            res = await query_domain(domain, resolver)
+            res = await query_domain(domain, resolver, dtype, logday)
             data_dict[domain.name] = res #store data in dictionary
             return res
-        except:
+        except Exception as err:
+            #exc_type, exc_value, exc_traceback = sys.exc_info()
+            #print("ERROR TYPE:", exc_type.__name__, ",ERROR VALUE:", exc_value)
             # if the request domain does not have HTTPS answer, we do not store the data in data_dict.
             pass
 
 
-async def query_all_dns_https(domains: [Domain], resolver: dns.asyncresolver, sem: asyncio.Semaphore, data_dict:dict):
+async def query_all_dns_https(domains: [Domain], resolver: dns.asyncresolver, sem: asyncio.Semaphore, 
+                              data_dict:dict, dtype:Literal["apex", "www"], logday: str):
     """
     Wrap function to query all domains
     """
-    tasks = [asyncio.ensure_future(safe_async_query(domain, resolver, sem, data_dict)) for domain in domains]
+    tasks = [asyncio.ensure_future(safe_async_query(domain, resolver, sem, data_dict, dtype, logday)) for domain in domains]
     await asyncio.gather(*tasks)
     
     
@@ -221,29 +221,6 @@ def init_domain_list(df: pd.DataFrame, columnname: str) -> [Domain]:
         dom = Domain(item[columnname], item["rank"])
         dom_l.append(dom)
     return dom_l
-
-"""
-async def query_https(domain: Domain, resolver: dns.asyncresolver, query_type: str = "HTTPS") -> Domain:
-    
-    #Asynchronous query dns records given the domain and resolver, 
-    #Set the domain.message and domain.error
-    #Return domain object. 
-
-    #Parameters
-    #----------
-    #domain : Domain
-    #resolver : dns.asyncresolver
-    #query_type : str, optional (default HTTPS)
-    
-    try:
-        qname = dns.name.from_text(domain.name)
-        res = await resolver.resolve(qname, query_type, raise_on_no_answer=False)
-        domain.set_message(res.response) 
-    except Exception as e:
-        exc_type, exc_value, exc_traceback = sys.exc_info()
-        domain.set_error(exc_type.__name__)
-    return domain
-"""
 
 
 async def query_domain_ns_soa(domain: Domain, resolver: dns.asyncresolver) -> Domain:
