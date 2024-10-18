@@ -8,15 +8,14 @@ import asyncio
 import time
 import datetime
 import psutil
-
+import click
 # local import 
 from utils import Domain, CNameLoopsTooLong
-from config import MAXCONCURRENCY, RESOLVER_LIST, DATAROOT_DIR, TRANCO_DIR
+from config import MAXCONCURRENCY, RESOLVER_LIST, DATAROOT_DIR, TRANCO_DIR, TLS_DIR
 from asyncquery import *
 
 from itertools import islice
 import multiprocessing
-
 
 
 def singlecore_querying(df_dict):
@@ -44,7 +43,8 @@ def singlecore_querying(df_dict):
 
         s = time.perf_counter()
 
-        loop.run_until_complete(query_all_dns_https(domains=dom_l, resolver=resolver, sem=sem, data_dict=RESULTS))
+        loop.run_until_complete(query_all_dns_https(domains=dom_l, resolver=resolver, sem=sem, 
+                                                    data_dict=RESULTS, dtype="apex", logday=todaystr))
 
         elapsed = time.perf_counter() - s
         print(f"{__file__} executed in {elapsed:0.6f} seconds.")
@@ -71,7 +71,8 @@ def singlecore_querying(df_dict):
 
         s = time.perf_counter()
 
-        loop.run_until_complete(query_all_dns_https(domains=dom_l, resolver=resolver, sem=sem, data_dict=RESULTS))
+        loop.run_until_complete(query_all_dns_https(domains=dom_l, resolver=resolver, sem=sem, 
+                                                    data_dict=RESULTS, dtype="www", logday=todaystr))
         
         elapsed = time.perf_counter() - s
         print(f"{__file__} executed in {elapsed:0.6f} seconds.")
@@ -108,15 +109,29 @@ def mltproc_querying(data, maxproc = psutil.cpu_count(logical = False), mute = F
     return 0 
 
 
-if __name__ == "__main__":
+
+@click.command()
+@click.option("--date", default=None, help="Specify Date to Parse. Default None. If None, parse current date.")
+def cmd(date):
+    ### Check Time
+    global todaystr
+    if date is None:
+        today = datetime.datetime.now()
+        todaystr = today.strftime("%Y-%m-%d")
+    else:
+        try:
+            ## test if argument date is correct format:
+            if len(date)==10:
+                today = datetime.datetime.strptime(date, "%Y-%m-%d")
+                todaystr = date                
+        except ValueError as ve:
+            print(f'You entered {date}, which is not a valid date format(%Y-%m-%d).')
+
 
     #print("TRANCO LIST DIR:", TRANCO_DIR)
     CPUCOUNT = psutil.cpu_count(logical = False)
     print("Total physical CPUs:", CPUCOUNT)
-
-    today = datetime.datetime.now()
-    todaystr = today.strftime("%Y-%m-%d")
-
+   
     trancodir = os.path.join(TRANCO_DIR, todaystr)
     print("Reading Tranco list from: ", trancodir)
 
@@ -140,9 +155,17 @@ if __name__ == "__main__":
         os.mkdir(OUT_DIR)
         print("Create folder:", OUT_DIR)
 
-    APEX_DIR = os.path.join(OUT_DIR, "apex")
-    WWW_DIR = os.path.join(OUT_DIR, "www")
+    global TLSCONN_DIR 
+    TLSCONN_DIR = os.path.join(TLS_DIR, todaystr)
+    if not os.path.exists(TLSCONN_DIR):
+        os.mkdir(TLSCONN_DIR)
+        print("Create folder:", TLSCONN_DIR)
 
+    global APEX_DIR 
+    APEX_DIR = os.path.join(OUT_DIR, "apex")
+    global WWW_DIR
+    WWW_DIR = os.path.join(OUT_DIR, "www")
+    
     if not os.path.exists(APEX_DIR):
         os.mkdir(APEX_DIR)
         print("Create folder:", APEX_DIR)
@@ -150,6 +173,9 @@ if __name__ == "__main__":
     if not os.path.exists(WWW_DIR):
         os.mkdir(WWW_DIR)
         print("Create folder:", WWW_DIR)
-
-   
+    print("Start query")
     mltproc_querying(tranco)
+    return 0
+
+if __name__ == "__main__":
+    cmd()
