@@ -1,5 +1,7 @@
 # dnsstudy
+
 Query DNS HTTPS records for tranco lists and establishes TLS connections to domains with mismatch IP adresses in HTTPS RR.
+
 ----
 ### Script folder
 `dailyquery.py`: pulls trancon1m records and call `code/multiproc_query.py` to query DNS HTTPS records.
